@@ -1,0 +1,70 @@
+# NetScope — списки доменов
+# Формат: секция начинается с @имя, ниже — домены по одному в строке.
+# Правьте файл как угодно: NetScope читает его при каждом запуске.
+# Домены можно добавлять и флагом --domain.
+
+@control
+# Эталонные площадки крупных CDN: почти всегда доступны, служат точкой отсчёта.
+cloudflare.com
+google.com
+github.com
+microsoft.com
+wikipedia.org
+mozilla.org
+akamai.com
+cdnjs.cloudflare.com
+aws.amazon.com
+bing.com
+
+@suspect
+# Домены, которые в разных странах и сетях ограничивают чаще всего.
+# NetScope не делает выводов «кто и зачем заблокировал» — он только измеряет,
+# что именно происходит с соединением на техническом уровне.
+facebook.com
+instagram.com
+x.com
+reddit.com
+youtube.com
+telegram.org
+t.me
+duckduckgo.com
+medium.com
+archive.org
+signal.org
+proton.me
+news.ycombinator.com
+rutracker.org
+discord.com
+linkedin.com
+
+@egress
+# Сервисы, которые честно отдают мой внешний IP.
+api.ipify.org
+api64.ipify.org
+icanhazip.com
+ifconfig.me
+checkip.amazonaws.com
+ipinfo.io
+ipapi.co
+
+@fronting
+# Популярные CDN для domain fronting / meek-транспорта.
+ajax.aspnetcdn.com
+download.visualstudio.microsoft.com
+www.gstatic.com
+cdn.jsdelivr.net
+www.cloudflare.com
+unpkg.com
+github.githubassets.com
+
+@quic
+# Хосты для проверки доступности QUIC/HTTP3 на порту 443.
+cloudflare.com
+www.google.com
+youtube.com
+
+@stun
+stun.l.google.com
+stun.cloudflare.com
+stun.nextcloud.com
+stun.stunprotocol.org
