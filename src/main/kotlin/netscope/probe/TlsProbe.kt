@@ -11,14 +11,19 @@ import netscope.core.Verdict
 import netscope.net.Doh
 import netscope.net.DnsType
 import netscope.net.Mitm
+import netscope.net.NetError
 import netscope.net.Tls
 import netscope.net.TlsInfo
 import netscope.net.symbol
 
 class TlsProbe(private val ctx: Ctx) {
+    /** Результат опроса сертификатов, чтобы не ходить в сеть дважды. */
+    private var certRes: List<Pair<String, TlsInfo>> = emptyList()
+
     suspend fun run() {
         versions()
         certificates()
+        certificatesUnavailable()
         sniVisibility()
         encryptedClientHello()
     }
@@ -53,7 +58,9 @@ class TlsProbe(private val ctx: Ctx) {
         val t = Targets.load(ctx.opts.extraDomains)
         val domains = (t.control.take(4) + t.suspect.take(if (ctx.opts.mode == Mode.QUICK) 3 else 6)).distinct()
         val res = parMap(6, domains) { d -> d to Tls.probe(d, 443, 5000) }
+        certRes = res
         val ok = res.filter { it.second.ok }
+        val unreachable = res.filter { !it.second.ok }
         ok.forEach { (_, i) -> i.leaf?.let { ctx.certsSeen[Mitm.sha256(it).take(23)] = it } }
         if (ok.isEmpty()) { c.set(Verdict.SKIP, "не удалось получить сертификаты"); return }
         val issuers = ok.map { it.second.issuer }.distinct()
@@ -83,6 +90,53 @@ class TlsProbe(private val ctx: Ctx) {
         }
         issuers.forEach { ctx.evidenceAll.add("CA: $it") }
         if (shortLived.isNotEmpty()) c.ev("короткоживущие сертификаты: ${shortLived.joinToString { it.first }} — бывает у перехватчиков")
+        if (unreachable.isNotEmpty()) {
+            c.ev("недоступны: ${unreachable.joinToString { it.first }}")
+        }
+    }
+
+    /**
+     * Сертификаты, которые получить не удалось: соединение сорвали, завернули
+     * или не дождались ответа. Отдельная проверка, потому что это признак
+     * фильтрации, а не проблема доверия.
+     */
+    private suspend fun certificatesUnavailable() {
+        val c = ctx.reg.add(Check("tls.certs.unreachable", "tls", "Недоступные сертификаты"))
+        val res = if (certRes.isNotEmpty()) certRes else {
+            val t = Targets.load(ctx.opts.extraDomains)
+            val domains = (t.control.take(4) + t.suspect.take(if (ctx.opts.mode == Mode.QUICK) 3 else 6)).distinct()
+            parMap(6, domains) { d -> d to Tls.probe(d, 443, 5000) }
+        }
+        val down = res.filter { !it.second.ok }
+        if (down.isEmpty()) {
+            c.set(Verdict.OK, "все ${res.size} сертификатов получены")
+            return
+        }
+        // DNS-ошибка и таймаут здесь — про сеть, а не про сертификат; RST/SSL — про вмешательство
+        val hostile = down.filter {
+            it.second.netError == NetError.RESET || it.second.netError == NetError.SSL ||
+                    it.second.netError == NetError.REFUSED || it.second.netError == NetError.EOF
+        }
+        c.set(
+            when {
+                down.size == res.size -> Verdict.FAIL
+                hostile.isNotEmpty() -> Verdict.FAIL
+                else -> Verdict.WARN
+            },
+            "${down.size} из ${res.size} доменов не отдают сертификат"
+        )
+        down.forEach { (d, i) ->
+            c.ev("  ${d.padEnd(22)} ${i.netError.symbol()}" + if (i.error.isNotBlank()) "  ${i.error.take(70)}" else "")
+        }
+        when {
+            down.size == res.size ->
+                ctx.blockers.add("ни один сертификат не получен — соединения сорваны целиком")
+            hostile.isNotEmpty() ->
+                ctx.blockers.add("сертификат недоступен (обрыв/RST): ${hostile.joinToString { it.first }}")
+            else ->
+                ctx.blockers.add("сертификат не получен вовремя: ${down.joinToString { it.first }}")
+        }
+        c.ev("полный список: --certs")
     }
 
     private suspend fun sniVisibility() {

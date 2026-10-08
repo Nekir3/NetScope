@@ -27,6 +27,7 @@ class Options(
     val verbose: Boolean = false,
     val noLive: Boolean = false,
     val listDomains: Boolean = false,
+    val certs: Boolean = false,
     val help: Boolean = false,
     val version: Boolean = false
 )

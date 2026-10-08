@@ -14,6 +14,8 @@ import netscope.core.Registry
 import netscope.core.Targets
 import netscope.core.Verdict
 import netscope.probe.BridgeProbe
+import netscope.probe.CertReport
+import netscope.probe.CertRow
 import netscope.probe.DnsProbe
 import netscope.probe.DpiProbe
 import netscope.probe.EnvProbe
@@ -47,6 +49,7 @@ fun main(args: Array<String>) {
     if (!term.enableAnsi()) Ansi.enabled = false
 
     if (opts.listDomains) { listDomains(term); return }
+    if (opts.certs) { certsReport(term, opts); return }
 
     val reg = Registry()
     val head = Headline(profile = "локальный", mode = opts.mode.title, targets = Targets.load(opts.extraDomains).let { it.control.size + it.suspect.size })
@@ -152,6 +155,34 @@ private fun printBanner(term: Terminal, opts: Options) {
     term.write("\r\n")
 }
 
+/**
+ * Режим `--certs`: инвентаризация сертификатов без полного прогона.
+ * Показывает, какие сертификаты недоступны, какие не проходят публичную
+ * проверку, и выгружает результат в JSON/HTML по желанию.
+ */
+private fun certsReport(term: Terminal, opts: Options) {
+    val width = term.size().first
+    val ctx = Ctx(opts, Registry(), Headline(profile = "сертификаты", mode = opts.mode.title))
+    val domains = if (opts.extraDomains.isNotEmpty()) opts.extraDomains.distinct() else CertReport.targets(ctx)
+    term.write("\r\n  " + Ansi.gray("получаю сертификаты для ${domains.size} доменов…") + "\r\n")
+    val rows = runBlocking { CertReport.collect(ctx, domains) }
+
+    term.write(CertReport.table(rows, width))
+
+    opts.jsonOut?.let { writeFile(it, CertReport.json(rows)) }
+    opts.htmlOut?.let { writeFile(it, Html.certificates(rows)) }
+    if (opts.jsonOut != null || opts.htmlOut != null) {
+        term.write("  " + Ansi.gray("отчёт: ") + listOfNotNull(opts.jsonOut, opts.htmlOut).joinToString(", ") + "\r\n\r\n")
+    }
+
+    val unreachable = rows.count { it.status == CertRow.Status.UNREACHABLE }
+    val untrusted = rows.count { it.status == CertRow.Status.UNTRUSTED }
+    System.exit(when {
+        unreachable > 0 || untrusted > 0 -> 1
+        else -> 0
+    })
+}
+
 private fun listDomains(term: Terminal) {
     val t = Targets.load()
     term.write("\r\n")
@@ -193,6 +224,7 @@ private fun printHelp(term: Terminal) {
     l("    ${Ansi.silver("--no-color | --ascii")}      без цвета / без Unicode-символов")
     l("    ${Ansi.silver("--verbose")}                показать все детали в итоговом отчёте")
     l("    ${Ansi.silver("--list-domains")}            показать используемые списки и выйти")
+    l("    ${Ansi.silver("--certs")}                   только сертификаты: что недоступно, чему нельзя доверять")
     l("    ${Ansi.silver("-h, --help | -v, --version")}")
     l("")
     l("  ${Ansi.bold("Примеры:")}")
@@ -200,6 +232,7 @@ private fun printHelp(term: Terminal) {
     l("    ${Ansi.gray("netscope --section dns,dpi --domain example.org")}")
     l("    ${Ansi.gray("netscope --html report.html --json report.json --verbose")}")
     l("    ${Ansi.gray("netscope --bridges \"obfs4 1.2.3.4:443 ABCDEF... cert=...\"")}")
+    l("    ${Ansi.gray("netscope --certs --json certs.json")}")
     l("")
     l("  ${Ansi.gray("Код возврата: 0 — чисто, 1 — есть замечания, 2 — подтверждённое вмешательство.")}")
     l("")
@@ -220,6 +253,7 @@ private fun parseArgs(args: Array<String>): Options {
     var verbose = false
     var plain = false
     var listDomains = false
+    var certs = false
     var help = false
     var version = false
 
@@ -250,6 +284,7 @@ private fun parseArgs(args: Array<String>): Options {
             a == "--verbose" -> verbose = true
             a == "--plain" || a == "--no-live" -> plain = true
             a == "--list-domains" -> listDomains = true
+            a == "--certs" -> certs = true
             else -> {
                 System.err.println("Неизвестный аргумент: $a  (--help — список опций)")
             }
@@ -270,6 +305,7 @@ private fun parseArgs(args: Array<String>): Options {
         verbose = verbose,
         noLive = plain,
         listDomains = listDomains,
+        certs = certs,
         help = help,
         version = version
     )

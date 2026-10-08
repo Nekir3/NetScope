@@ -128,6 +128,85 @@ footer{color:#64748b;border-color:#e2e8f0}}
         return sb.toString()
     }
 
+    /** Отчёт по инвентаризации сертификатов для режима --certs. */
+    fun certificates(rows: List<netscope.probe.CertRow>): String {
+        val sb = StringBuilder()
+        sb.append("""<!DOCTYPE html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NetScope — сертификаты</title>
+<style>
+:root{--bg:#0b0f16;--panel:#121826;--panel2:#0e1420;--line:#1e2a3d;--fg:#dce4f0;--dim:#7c8ba3;--ok:#4ade80;--warn:#fbbf24;--fail:#f87171;--acc:#8b5cf6}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(1200px 600px at 20% -10%,#16203a 0%,var(--bg) 55%);color:var(--fg);
+font:14px/1.6 ui-sans-serif,system-ui,"Segoe UI",Roboto,Inter,Arial,sans-serif;padding:32px 20px}
+.wrap{max-width:1080px;margin:0 auto}
+h1{font-size:26px;margin:0 0 4px;letter-spacing:-.02em}
+h1 span{background:linear-gradient(90deg,#8b5cf6,#38bdf8);-webkit-background-clip:text;background-clip:text;color:transparent}
+.sub{color:var(--dim);margin-bottom:24px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 20px;margin-bottom:16px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line)}
+th{color:var(--dim);font-weight:500;font-size:12px;text-transform:uppercase;letter-spacing:.05em}
+tr:last-child td{border-bottom:none}
+.tag{display:inline-block;padding:2px 9px;border-radius:99px;font-size:12px;border:1px solid}
+.tag.ok{color:var(--ok);border-color:#4ade8055;background:#4ade8011}
+.tag.warn{color:var(--warn);border-color:#fbbf2455;background:#fbbf2411}
+.tag.fail{color:var(--fail);border-color:#f8717155;background:#f8717111}
+.mono{font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#93a3ba;word-break:break-word}
+.dim{color:var(--dim)}
+footer{color:var(--dim);font-size:12.5px;margin-top:22px;border-top:1px solid var(--line);padding-top:14px}
+@media (prefers-color-scheme:light){body{background:#f6f8fc;color:#16202f}body .card{background:#fff;border-color:#e2e8f0}
+h1 span{background:linear-gradient(90deg,#7c3aed,#0284c7);-webkit-background-clip:text;background-clip:text;color:transparent}
+.dim{color:#64748b}.mono{color:#475569}footer{color:#64748b;border-color:#e2e8f0}}
+</style></head><body><div class="wrap">
+""")
+        val unreachable = rows.count { it.status == netscope.probe.CertRow.Status.UNREACHABLE }
+        val untrusted = rows.count { it.status == netscope.probe.CertRow.Status.UNTRUSTED }
+        sb.append("<h1><span>NetScope</span> · сертификаты</h1>")
+        sb.append("<div class=\"sub\">${rows.size} доменов · недоступно $unreachable · без публичного доверия $untrusted</div>")
+
+        sb.append("<div class=\"card\"><table><thead><tr>")
+        sb.append("<th>Статус</th><th>Домен</th><th>Срок</th><th>CA / причина</th></tr></thead><tbody>")
+        val order = listOf(netscope.probe.CertRow.Status.UNREACHABLE, netscope.probe.CertRow.Status.UNTRUSTED, netscope.probe.CertRow.Status.OK)
+        for (r in rows.sortedBy { order.indexOf(it.status) }) {
+            val cls = when (r.status) {
+                netscope.probe.CertRow.Status.OK -> "ok"
+                netscope.probe.CertRow.Status.UNTRUSTED -> "warn"
+                netscope.probe.CertRow.Status.UNREACHABLE -> "fail"
+            }
+            val label = when (r.status) {
+                netscope.probe.CertRow.Status.OK -> "доступен"
+                netscope.probe.CertRow.Status.UNTRUSTED -> "без доверия"
+                netscope.probe.CertRow.Status.UNREACHABLE -> "недоступен"
+            }
+            val term = if (r.reachable) esc(r.notAfter) + " · " + r.daysLeft + " дн." else "—"
+            val tail = if (r.reachable) esc(r.issuer) else "<span class=\"mono\">${esc(r.netError.name)} ${esc(r.error.take(70))}</span>"
+            sb.append("<tr><td><span class=\"tag $cls\">$label</span></td>")
+            sb.append("<td>${esc(r.host)}</td><td class=\"dim\">$term</td><td class=\"mono\">$tail</td></tr>")
+        }
+        sb.append("</tbody></table></div>")
+
+        val bad = rows.filter { it.status != netscope.probe.CertRow.Status.OK }
+        if (bad.isNotEmpty()) {
+            sb.append("<div class=\"card\"><h2 style=\"font-size:14px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);margin:0 0 10px\">Подробнее</h2>")
+            bad.forEach { r ->
+                sb.append("<div style=\"margin-bottom:12px\"><b>${esc(r.host)}</b>")
+                sb.append("<div class=\"mono\">${esc(r.reason.ifBlank { "—" })}</div>")
+                if (r.reachable) {
+                    sb.append("<div class=\"mono\">до ${esc(r.notAfter)} · ${esc(r.sigAlg)} · ${esc(r.pubKey)} · цепочка ${r.chainLength} · SHA-256 ${esc(r.fingerprint)}</div>")
+                    r.markers().forEach { sb.append("<div class=\"mono\" style=\"color:var(--fail)\">маркер перехвата: ${esc(it)}</div>") }
+                }
+                sb.append("</div>")
+            }
+            sb.append("</div>")
+        }
+        sb.append("<footer>NetScope измеряет только технические признаки и не делает выводов о причинах. ")
+        sb.append("Недоступность сертификата означает, что TLS-соединение не удалось установить: таймаут, RST или ошибка хендшейка.</footer>")
+        sb.append("</div></body></html>")
+        return sb.toString()
+    }
+
     private fun checkHtml(c: Check): String {
         val cls = when (c.verdict) {
             Verdict.OK -> "ok"; Verdict.WARN -> "warn"; Verdict.FAIL -> "fail"
